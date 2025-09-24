@@ -2,7 +2,7 @@ ENV['VAGRANT_NO_PARALLEL'] = 'no'
 NODE_ROLES = (ENV['E2E_NODE_ROLES'] ||
   ["server-0", "agent-0"])
 NODE_BOXES = (ENV['E2E_NODE_BOXES'] ||
-  ['generic/ubuntu2310', 'generic/ubuntu2310'])
+  ['bento/ubuntu-24.04', 'bento/ubuntu-24.04'])
 GITHUB_BRANCH = (ENV['E2E_GITHUB_BRANCH'] || "master")
 RELEASE_VERSION = (ENV['E2E_RELEASE_VERSION'] || "")
 GOCOVER = (ENV['E2E_GOCOVER'] || "")
@@ -38,6 +38,9 @@ def provision(vm, role, role_num, node_num)
 
   if role.include?("server") && role_num == 0
     vm.provision "private-registry", type: "shell", inline: writePrivateRegistry
+    vm.provision "create-images-dir", type: "shell", inline: "mkdir -p -m 777 /tmp/images /var/lib/rancher/k3s/agent/images"
+    vm.provision "copy-images-file", type: "file", source: "../../../scripts/airgap/image-list.txt", destination: "/tmp/images/image-list.txt"
+    vm.provision "move-images-file", type: "shell", inline: "mv /tmp/images/image-list.txt /var/lib/rancher/k3s/agent/images/image-list.txt"
 
     vm.provision 'k3s-primary-server', type: 'k3s', run: 'once' do |k3s|
       k3s.args = "server "
@@ -54,6 +57,9 @@ def provision(vm, role, role_num, node_num)
   
   elsif role.include?("server") && role_num != 0
     vm.provision "shell", inline: writePrivateRegistry
+    vm.provision "create-images-dir", type: "shell", inline: "mkdir -p -m 777 /tmp/images /var/lib/rancher/k3s/agent/images"
+    vm.provision "copy-images-file", type: "file", source: "../../../scripts/airgap/image-list.txt", destination: "/tmp/images/image-list.txt"
+    vm.provision "move-images-file", type: "shell", inline: "mv /tmp/images/image-list.txt /var/lib/rancher/k3s/agent/images/image-list.txt"
 
     vm.provision 'k3s-secondary-server', type: 'k3s', run: 'once' do |k3s|
       k3s.args = "server"

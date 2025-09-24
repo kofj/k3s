@@ -10,7 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/k3s-io/k3s/pkg/agent/loadbalancer"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 )
 
 type Proxy interface {
@@ -22,7 +22,7 @@ type Proxy interface {
 	SupervisorAddresses() []string
 	APIServerURL() string
 	IsAPIServerLBEnabled() bool
-	SetHealthCheck(address string, healthCheck func() bool)
+	SetHealthCheck(address string, healthCheck loadbalancer.HealthCheckFunc)
 }
 
 // NewSupervisorProxy sets up a new proxy for retrieving supervisor and apiserver addresses.  If
@@ -52,17 +52,18 @@ func NewSupervisorProxy(ctx context.Context, lbEnabled bool, dataDir, supervisor
 			return nil, err
 		}
 		p.supervisorLB = lb
-		p.supervisorURL = lb.LoadBalancerServerURL()
+		p.supervisorURL = lb.LocalURL()
 		p.apiServerURL = p.supervisorURL
 	}
 
 	u, err := url.Parse(p.initialSupervisorURL)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to parse %s", p.initialSupervisorURL)
+		return nil, pkgerrors.WithMessagef(err, "failed to parse %s", p.initialSupervisorURL)
 	}
 	p.fallbackSupervisorAddress = u.Host
 	p.supervisorPort = u.Port()
 
+	logrus.Debugf("Supervisor proxy using supervisor=%s apiserver=%s lb=%v", p.supervisorURL, p.apiServerURL, p.lbEnabled)
 	return &p, nil
 }
 
@@ -101,7 +102,7 @@ func (p *proxy) Update(addresses []string) {
 	p.supervisorAddresses = supervisorAddresses
 }
 
-func (p *proxy) SetHealthCheck(address string, healthCheck func() bool) {
+func (p *proxy) SetHealthCheck(address string, healthCheck loadbalancer.HealthCheckFunc) {
 	if p.supervisorLB != nil {
 		p.supervisorLB.SetHealthCheck(address, healthCheck)
 	}
@@ -132,29 +133,35 @@ func (p *proxy) setSupervisorPort(addresses []string) []string {
 // load-balancer, and the address of this load-balancer is returned instead of the actual apiserver
 // addresses.
 func (p *proxy) SetAPIServerPort(port int, isIPv6 bool) error {
+	if p.apiServerEnabled {
+		logrus.Debugf("Supervisor proxy apiserver port already set")
+		return nil
+	}
+
 	u, err := url.Parse(p.initialSupervisorURL)
 	if err != nil {
-		return errors.Wrapf(err, "failed to parse server URL %s", p.initialSupervisorURL)
+		return pkgerrors.WithMessagef(err, "failed to parse server URL %s", p.initialSupervisorURL)
 	}
 	p.apiServerPort = strconv.Itoa(port)
 	u.Host = sysnet.JoinHostPort(u.Hostname(), p.apiServerPort)
-
-	p.apiServerURL = u.String()
-	p.apiServerEnabled = true
 
 	if p.lbEnabled && p.apiServerLB == nil {
 		lbServerPort := p.lbServerPort
 		if lbServerPort != 0 {
 			lbServerPort = lbServerPort - 1
 		}
-		lb, err := loadbalancer.New(p.context, p.dataDir, loadbalancer.APIServerServiceName, p.apiServerURL, lbServerPort, isIPv6)
+		lb, err := loadbalancer.New(p.context, p.dataDir, loadbalancer.APIServerServiceName, u.String(), lbServerPort, isIPv6)
 		if err != nil {
 			return err
 		}
-		p.apiServerURL = lb.LoadBalancerServerURL()
 		p.apiServerLB = lb
+		p.apiServerURL = lb.LocalURL()
+	} else {
+		p.apiServerURL = u.String()
 	}
 
+	logrus.Debugf("Supervisor proxy apiserver port changed; apiserver=%s lb=%v", p.apiServerURL, p.lbEnabled)
+	p.apiServerEnabled = true
 	return nil
 }
 
